@@ -2,7 +2,7 @@ import requests
 import time
 import os
 import re
-from datetime import datetime
+from datetime import datetime, timezone  # Tambahkan timezone
 
 # ================== KONFIGURASI ==================
 BASE_PATH = r"X:\AviMet\History"
@@ -14,25 +14,21 @@ INTERVAL = 15  # detik
 
 def get_file_his():
     """
-    Membentuk path otomatis:
+    Membentuk path otomatis berdasarkan waktu UTC:
     X:\AviMet\History\YYYY\Mon\WIND_METGARDEN_DD.his
     """
-    now = datetime.now()
-    year = now.strftime("%Y")      # 2025
-    month = now.strftime("%b")     # Jan..Dec
-    day = now.strftime("%d")       # 01..31
+    # GUNAKAN UTC UNTUK PENENTUAN NAMA FILE
+    now_utc = datetime.now(timezone.utc)
+    
+    year = now_utc.strftime("%Y")      # 2025
+    month = now_utc.strftime("%b")     # Jan-Dec
+    day = now_utc.strftime("%d")       # 01..31 (Mengikuti tanggal UTC)
+    
     filename = f"WIND_METGARDEN_{day}.his"
     return os.path.join(BASE_PATH, year, month, filename)
 
 
 def ambil_data_his():
-    """
-    Mengambil data terakhir dari file .his:
-    - dt         -> datetime (dipakai untuk created_at ThingSpeak)
-    - timestamp  -> UNIX timestamp (field1)
-    - wsins      -> field2
-    - wdins      -> field3
-    """
     path_file = get_file_his()
 
     if not os.path.exists(path_file):
@@ -51,8 +47,7 @@ def ambil_data_his():
     if not last_line:
         raise ValueError("File kosong atau tidak ada data valid")
 
-    # ================== CREATEDATE ==================
-    # Ambil tanggal & jam dari awal baris (aman untuk TAB / spasi)
+    # Ambil tanggal & jam dari awal baris
     m = re.match(
         r"^(\d{4}-\d{2}-\d{2})\s+(\d{2}:\d{2}:\d{2})",
         last_line
@@ -63,15 +58,19 @@ def ambil_data_his():
     date_str = m.group(1)
     time_str = m.group(2)
 
+    # Parsing string tanggal dari file
     dt = datetime.strptime(
         f"{date_str} {time_str}",
         "%Y-%m-%d %H:%M:%S"
     )
+    
+    # PENTING: Anggap data di dalam file juga UTC
+    # Kita set timezone info ke UTC agar timestamp unix benar
+    dt = dt.replace(tzinfo=timezone.utc)
 
     timestamp = int(dt.timestamp())
 
     # ================== WSINS & WDINS ==================
-    # Split whitespace supaya kebal TAB / spasi campuran
     cols = re.split(r"\s+", last_line)
 
     if len(cols) <= 10:
@@ -86,12 +85,10 @@ def ambil_data_his():
 
 
 def kirim_ke_thingspeak(dt, timestamp, wsins, wdins):
-    """
-    created_at DIPAKSA mengikuti waktu data (.his)
-    """
     payload = {
         "api_key": API_KEY,
-        "created_at": dt.isoformat(),   # ⬅ KUNCI AGAR WAKTU PERSIS
+        # Mengirim format ISO yang menyertakan info UTC (+00:00 atau Z)
+        "created_at": dt.isoformat(), 
         "field1": timestamp,
         "field2": wsins,
         "field3": wdins
@@ -107,7 +104,7 @@ def kirim_ke_thingspeak(dt, timestamp, wsins, wdins):
 
 # ================== LOOP UTAMA ==================
 if __name__ == "__main__":
-    print("ThingSpeak AviMet uploader STARTED")
+    print("ThingSpeak AviMet uploader STARTED (Mode: UTC)")
 
     while True:
         try:
@@ -118,8 +115,9 @@ if __name__ == "__main__":
             )
 
             if result != "0":
+                # Tampilkan log (dt akan menampilkan waktu UTC)
                 print(
-                    f"OK | {dt} | "
+                    f"OK | UTC: {dt} | "
                     f"WSINS={wsins} m/s | WDINS={wdins}°"
                 )
             else:
